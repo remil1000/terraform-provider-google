@@ -146,9 +146,13 @@ The following arguments are supported:
 * `replica_configuration` - (Optional) The configuration for replication. The
     configuration is detailed below.
 
+* `on_premises_configuration` - (Optional) Configuration specific to
+  on-premises instances. No `settings` can be defined. The configuration is
+   detailed below.
+
 The required `settings` block supports:
 
-* `tier` - (Required) The machine tier (First Generation) or type (Second Generation) to use. See
+* `tier` - (Optional) The machine tier (First Generation) or type (Second Generation) to use. See
     [tiers](https://cloud.google.com/sql/docs/admin-api/v1beta4/tiers) for more details and
     supported versions. Postgres supports only shared-core machine types such as `db-f1-micro`, and custom
     machine types such as `db-custom-2-13312`. See the
@@ -269,6 +273,13 @@ to work, cannot be updated, and supports:
 
 * `verify_server_certificate` - (Optional) True if the master's common name
     value is checked during the SSL handshake.
+
+The optional `on_premises_configuration` block must have the inner `host_port`
+attribute set and not `settings` block defined at all (such a setup isn't
+supported by the Google sqladmin API):
+
+* `host_port` - (Required) hostname:port tuple specifying the virtual remote
+  master, used in the case of [external replicas configuration](https://cloud.google.com/sql/docs/mysql/replication/configure-external-replica) ([Golang API](https://godoc.org/google.golang.org/api/sqladmin/v1beta4#OnPremisesConfiguration))
 
 ## Attributes Reference
 

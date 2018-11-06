@@ -61,7 +61,7 @@ func resourceSqlDatabaseInstance() *schema.Resource {
 
 			"settings": &schema.Schema{
 				Type:     schema.TypeList,
-				Required: true,
+				Optional: true,
 				MaxItems: 1,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
@@ -71,7 +71,7 @@ func resourceSqlDatabaseInstance() *schema.Resource {
 						},
 						"tier": &schema.Schema{
 							Type:     schema.TypeString,
-							Required: true,
+							Optional: true,
 						},
 						"activation_policy": &schema.Schema{
 							Type:     schema.TypeString,
@@ -367,6 +367,19 @@ func resourceSqlDatabaseInstance() *schema.Resource {
 					},
 				},
 			},
+			"on_premises_configuration": &schema.Schema{
+				Type:     schema.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"host_port": &schema.Schema{
+							Type:     schema.TypeString,
+							Required: true,
+						},
+					},
+				},
+			},
 			"server_ca_cert": &schema.Schema{
 				Type:     schema.TypeList,
 				Computed: true,
@@ -421,6 +434,9 @@ func suppressFirstGen(k, old, new string, d *schema.ResourceData) bool {
 
 // Detects whether a database is 1st Generation by inspecting the tier name
 func isFirstGen(d *schema.ResourceData) bool {
+	if sqlDatabaseIsOnPremises(d) {
+		return false
+	}
 	settingsList := d.Get("settings").([]interface{})
 	settings := settingsList[0].(map[string]interface{})
 	tier := settings["tier"].(string)
@@ -453,12 +469,13 @@ func resourceSqlDatabaseInstanceCreate(d *schema.ResourceData, meta interface{})
 	d.Set("name", name)
 
 	instance := &sqladmin.DatabaseInstance{
-		Name:                 name,
-		Region:               region,
-		Settings:             expandSqlDatabaseInstanceSettings(d.Get("settings").([]interface{}), !isFirstGen(d)),
-		DatabaseVersion:      d.Get("database_version").(string),
-		MasterInstanceName:   d.Get("master_instance_name").(string),
-		ReplicaConfiguration: expandReplicaConfiguration(d.Get("replica_configuration").([]interface{})),
+		Name:                    name,
+		Region:                  region,
+		Settings:                expandSqlDatabaseInstanceSettings(d.Get("settings").([]interface{}), !isFirstGen(d)),
+		DatabaseVersion:         d.Get("database_version").(string),
+		MasterInstanceName:      d.Get("master_instance_name").(string),
+		ReplicaConfiguration:    expandReplicaConfiguration(d.Get("replica_configuration").([]interface{})),
+		OnPremisesConfiguration: expandOnPremisesConfiguration(d.Get("on_premises_configuration").([]interface{})),
 	}
 
 	// Modifying a replica during Create can cause problems if the master is
@@ -493,7 +510,7 @@ func resourceSqlDatabaseInstanceCreate(d *schema.ResourceData, meta interface{})
 
 	// If a default root user was created with a wildcard ('%') hostname, delete it.
 	// Users in a replica instance are inherited from the master instance and should be left alone.
-	if sqlDatabaseIsMaster(d) {
+	if sqlDatabaseIsMaster(d) && !sqlDatabaseIsOnPremises(d) {
 		var users *sqladmin.UsersListResponse
 		err = retryTime(func() error {
 			users, err = config.clientSqlAdmin.Users.List(project, instance.Name).Do()
@@ -580,6 +597,17 @@ func expandReplicaConfiguration(configured []interface{}) *sqladmin.ReplicaConfi
 			Username:                _replicaConfiguration["username"].(string),
 			VerifyServerCertificate: _replicaConfiguration["verify_server_certificate"].(bool),
 		},
+	}
+}
+
+func expandOnPremisesConfiguration(configured []interface{}) *sqladmin.OnPremisesConfiguration {
+	if len(configured) == 0 || configured[0] == nil {
+		return nil
+	}
+
+	_onPremisesConfiguration := configured[0].(map[string]interface{})
+	return &sqladmin.OnPremisesConfiguration{
+		HostPort: _onPremisesConfiguration["host_port"].(string),
 	}
 }
 
@@ -689,8 +717,10 @@ func resourceSqlDatabaseInstanceRead(d *schema.ResourceData, meta interface{}) e
 	d.Set("connection_name", instance.ConnectionName)
 	d.Set("service_account_email_address", instance.ServiceAccountEmailAddress)
 
-	if err := d.Set("settings", flattenSettings(instance.Settings)); err != nil {
-		log.Printf("[WARN] Failed to set SQL Database Instance Settings")
+	if instance.Settings != nil {
+		if err := d.Set("settings", flattenSettings(instance.Settings)); err != nil {
+			log.Printf("[WARN] Failed to set SQL Database Instance Settings")
+		}
 	}
 
 	if err := d.Set("replica_configuration", flattenReplicaConfiguration(instance.ReplicaConfiguration, d)); err != nil {
@@ -986,4 +1016,12 @@ func instanceMutexKey(project, instance_name string) string {
 func sqlDatabaseIsMaster(d *schema.ResourceData) bool {
 	_, ok := d.GetOk("master_instance_name")
 	return !ok
+}
+
+// sqlDatabaseIsOnPremises returns true if the provided schema.ResourceData
+// represents an on premises master SQL Instance used for external replication,
+// and false otherwise.
+func sqlDatabaseIsOnPremises(d *schema.ResourceData) bool {
+	_, ok := d.GetOk("on_premises_configuration")
+	return ok
 }
